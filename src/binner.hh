@@ -1,7 +1,6 @@
 #ifndef binner_h
 #define binner_h
 
-#include <algorithm>
 #include <limits>
 #include <type_traits>
 

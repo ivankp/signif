@@ -1,11 +1,12 @@
 #include <iostream>
+#include <iomanip>
 #include <vector>
 #include <string>
 #include <utility>
 
 #include <TFile.h>
 #include <TTree.h>
-#include <TH1.h>
+// #include <TH1.h>
 
 #include "binner.hh"
 #include "timed_counter.hh"
@@ -19,9 +20,8 @@ const pair<double,double> mass_window{121.,129.};
 struct bkg_sig {
   double bkg, sig;
   bkg_sig(): bkg(0), sig(0) { }
-  const bkg_sig& operator()(double x, double w) noexcept {
-    if (x<mass_window.first) bkg += w;
-    else if (x>mass_window.second) bkg += w;
+  const bkg_sig& operator()(double m, double w) noexcept {
+    if (m < mass_window.first || m > mass_window.second) bkg += w;
     else sig += w;
     return *this;
   }
@@ -31,9 +31,9 @@ int main(int argc, char* argv[])
 {
   const double lumi = 6.;
 
-  TFile* out = new TFile("out.root","recreate");
+  // TFile* out = new TFile("out.root","recreate");
 
-  h_(m_yy,100,105,160)
+  // h_(m_yy,100,105,160)
 
   binner<bkg_sig> pT_yy_bs({0,20,100,200});
 
@@ -60,8 +60,8 @@ int main(int argc, char* argv[])
 
       const double w = eff*weight*lumi;
 
-      h_m_yy->Fill(m_yy,w);
-      pT_yy_bs.fill(m_yy,pT_yy,w);
+      // h_m_yy->Fill(m_yy,w);
+      pT_yy_bs.fill(pT_yy/1e3,m_yy,w);
     }
     cout << endl;
 
@@ -70,13 +70,14 @@ int main(int argc, char* argv[])
   }
 
   for (unsigned i=1, n=pT_yy_bs.nbins(); i<=n; ++i)
-    cout <<'['<< pT_yy_bs.ledge(i) <<','<< pT_yy_bs.redge(i) <<"): "
+    cout <<'['<<setw(3)<< pT_yy_bs.ledge(i)
+         <<','<<setw(3)<< pT_yy_bs.redge(i) <<"): "
          << pT_yy_bs[i].sig << '\t'
          << pT_yy_bs[i].bkg << endl;
 
-  out->Write();
-  out->Close();
-  delete out;
+  // out->Write();
+  // out->Close();
+  // delete out;
 
   return 0;
 }
