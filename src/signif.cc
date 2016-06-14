@@ -9,7 +9,7 @@
 
 #include <TFile.h>
 #include <TTree.h>
-// #include <TH1.h>
+#include <TH1.h>
 
 #include "binner.hh"
 #include "timed_counter.hh"
@@ -111,7 +111,7 @@ int main(int argc, char* argv[])
         reinterpret_cast<void*>(&(v->_x))
       );
 
-    for (Long64_t ent=0, n=100000/*tree->GetEntries()*/; ent<n; ++ent) {
+    for (Long64_t ent=0, n=tree->GetEntries(); ent<n; ++ent) {
       counter(ent);
       tree->GetEntry(ent);
 
@@ -131,20 +131,47 @@ int main(int argc, char* argv[])
     delete file;
   }
 
+  TFile* file = new TFile("sig.root","recreate");
+
+  vector<TH1*> hists;
+  hists.reserve(vars.size());
+
   for (const auto& v : vars) {
+    TH1 *h;
+    if (v->name[0]=='N') {
+      std::vector<double> edges(v->bins.edges());
+      edges.back() = edges[edges.size()-2]+1;
+      h = new TH1D(v->name.c_str(),"",v->bins.nbins(),edges.data());
+    } else if (v->name[0]=='p' && v->name[1]=='T') {
+      std::vector<double> edges(v->bins.edges());
+      for (auto& e : edges) e /= 1e3;
+      h = new TH1D(v->name.c_str(),"",v->bins.nbins(),edges.data());
+    } else {
+      h = new TH1D(v->name.c_str(),"",v->bins.nbins(),v->bins.edges().data());
+    }
+    hists.push_back(h);
+
     cout << v->name << endl;
     const unsigned n = v->bins.nbins();
     const unsigned w = log10(v->bins.edges().back())+1;
-    for (unsigned i=1; i<=n; ++i)
+    for (unsigned i=1; i<=n; ++i) {
       cout <<'['<<setw(w)<< v->bins.ledge(i)
            <<','<<setw(w)<< v->bins.redge(i) <<"): "
            << v->bins[i].sig << "  "
-           << v->bins[i].bkg << "  "
-           << v->bins[i].sig / sqrt(
-                v->bins[i].sig + factor * v->bins[i].bkg
-              ) << endl;
+           << v->bins[i].bkg << "  ";
+      // double sig = v->bins[i].sig / sqrt(
+      //   v->bins[i].sig + factor * v->bins[i].bkg );
+      double sig = v->bins[i].sig / sqrt( factor * v->bins[i].bkg );
+      cout << sig << endl;
+
+      h->SetBinContent(i,sig);
+    }
     cout << endl;
   }
+
+  file->Write();
+  file->Close();
+  delete file;
 
   return 0;
 }
