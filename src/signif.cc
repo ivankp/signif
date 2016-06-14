@@ -1,8 +1,11 @@
 #include <iostream>
 #include <iomanip>
+#include <fstream>
 #include <vector>
 #include <string>
 #include <utility>
+#include <memory>
+#include <cmath>
 
 #include <TFile.h>
 #include <TTree.h>
@@ -13,9 +16,19 @@
 
 using namespace std;
 
+#define test(var) \
+  std::cout <<"\033[36m"<< #var <<"\033[0m"<< " = " << var << std::endl;
+
 #define h_(name,nbins,lo,hi) TH1D *h_##name = new TH1D(#name,"",nbins,lo,hi);
 
-const pair<double,double> mass_window{121.,129.};
+constexpr pair<double,double> mass_range {105000.,160000.};
+constexpr pair<double,double> mass_window{121000.,129000.};
+
+constexpr double len(pair<double,double> p) {
+  return p.second - p.first;
+}
+
+constexpr double factor = len(mass_window)/(len(mass_range)-len(mass_window));
 
 struct bkg_sig {
   double bkg, sig;
@@ -27,17 +40,56 @@ struct bkg_sig {
   }
 };
 
+struct var {
+  string name;
+  binner<bkg_sig> bins;
+  union { Float_t f; Int_t i; } _x;
+  Float_t x() const noexcept {
+    if (name[0]=='N') return _x.i;
+    else return _x.f;
+  }
+
+  var(const string& str) {
+    vector<string> tok;
+    bool space = true;
+    for (char c : str) {
+      if (c==' ' || c==',') {
+        space = true;
+      } else if (space) {
+        tok.emplace_back(1,c);
+        space = false;
+      } else tok.back() += c;
+    }
+    name = tok.front();
+    vector<double> edges(tok.size()-1);
+    for (unsigned i=1; i<tok.size(); ++i)
+      edges[i-1] = std::stod(tok[i]);
+    bins.init(edges.begin(),edges.end());
+  }
+};
+
 int main(int argc, char* argv[])
 {
   const double lumi = 6.;
 
-  // TFile* out = new TFile("out.root","recreate");
+  vector<unique_ptr<var>> vars;
 
-  // h_(m_yy,100,105,160)
+  ifstream binsf("bins.txt");
+  if (binsf.is_open()) {
+    string line;
+    while ( getline(binsf,line) ) {
+      // cout << line << '\n';
+      if (line.size()==0 || line[0]=='#') continue;
+      vars.emplace_back(new var(line));
+    }
+    binsf.close();
+  } else {
+    cout << "Unable to open bins.txt" << endl;
+    return 1;
+  }
 
-  binner<bkg_sig> pT_yy_bs({0,20,100,200});
-
-  Float_t eff, weight, m_yy, pT_yy;
+  Char_t isPassed;
+  Float_t eff, weight, m_yy;
 
   timed_counter counter;
   for (int i=1; i<argc; ++i) {
@@ -49,19 +101,29 @@ int main(int argc, char* argv[])
 
     tree->SetBranchAddress("HGamEventInfoAuxDyn.crossSectionBRfilterEff", &eff);
     tree->SetBranchAddress("HGamEventInfoAuxDyn.weight", &weight);
+    tree->SetBranchAddress("HGamEventInfoAuxDyn.isPassed", &isPassed);
 
     tree->SetBranchAddress("HGamEventInfoAuxDyn.m_yy", &m_yy);
-    tree->SetBranchAddress("HGamEventInfoAuxDyn.pT_yy", &pT_yy);
+
+    for (auto& v : vars)
+      tree->SetBranchAddress(
+        ("HGamEventInfoAuxDyn."+v->name).c_str(),
+        reinterpret_cast<void*>(&(v->_x))
+      );
 
     for (Long64_t ent=0, n=100000/*tree->GetEntries()*/; ent<n; ++ent) {
       counter(ent);
       tree->GetEntry(ent);
-      m_yy /= 1e3;
+
+      if (!isPassed) continue;
+
+      if (m_yy < mass_range.first || m_yy > mass_range.second)
+        continue;
 
       const double w = eff*weight*lumi;
 
-      // h_m_yy->Fill(m_yy,w);
-      pT_yy_bs.fill(pT_yy/1e3,m_yy,w);
+      for (auto& v : vars)
+        v->bins.fill(v->x(),m_yy,w);
     }
     cout << endl;
 
@@ -69,15 +131,20 @@ int main(int argc, char* argv[])
     delete file;
   }
 
-  for (unsigned i=1, n=pT_yy_bs.nbins(); i<=n; ++i)
-    cout <<'['<<setw(3)<< pT_yy_bs.ledge(i)
-         <<','<<setw(3)<< pT_yy_bs.redge(i) <<"): "
-         << pT_yy_bs[i].sig << '\t'
-         << pT_yy_bs[i].bkg << endl;
-
-  // out->Write();
-  // out->Close();
-  // delete out;
+  for (const auto& v : vars) {
+    cout << v->name << endl;
+    const unsigned n = v->bins.nbins();
+    const unsigned w = log10(v->bins.edges().back())+1;
+    for (unsigned i=1; i<=n; ++i)
+      cout <<'['<<setw(w)<< v->bins.ledge(i)
+           <<','<<setw(w)<< v->bins.redge(i) <<"): "
+           << v->bins[i].sig << "  "
+           << v->bins[i].bkg << "  "
+           << v->bins[i].sig / sqrt(
+                v->bins[i].sig + factor * v->bins[i].bkg
+              ) << endl;
+    cout << endl;
+  }
 
   return 0;
 }

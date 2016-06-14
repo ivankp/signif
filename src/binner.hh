@@ -2,6 +2,7 @@
 #define binner_h
 
 #include <limits>
+#include <algorithm>
 #include <type_traits>
 
 /*
@@ -38,6 +39,8 @@ protected:
   { x(args...); }
 
 public:
+  binner() { }
+
   binner(size_type nbins, edge_t xlow, edge_t xup)
   : _edges(nbins+1), _bins(nbins+2)
   {
@@ -54,6 +57,13 @@ public:
   binner(InputIterator first, InputIterator last)
   : _edges(first,last), _bins(_edges.size()+1)
   { }
+
+  template <typename InputIterator>
+  void init(InputIterator first, InputIterator last)
+  {
+    _edges = {first,last};
+    _bins.resize(_edges.size()+1);
+  }
 
   size_type fill(edge_t e) {
     size_type i = _edges.size()-1;
