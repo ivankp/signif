@@ -10,6 +10,7 @@
 #include <TFile.h>
 #include <TTree.h>
 #include <TH1.h>
+#include <TKey.h>
 
 #include "binner.hh"
 #include "timed_counter.hh"
@@ -30,13 +31,21 @@ constexpr double len(pair<double,double> p) {
 
 constexpr double factor = len(mass_window)/(len(mass_range)-len(mass_window));
 
-struct bkg_sig {
+class bkg_sig {
+  double bkg_tmp, sig_tmp;
+public:
   double bkg, sig;
-  bkg_sig(): bkg(0), sig(0) { }
+  bkg_sig(): bkg_tmp(0), sig_tmp(0), bkg(0), sig(0) { }
   const bkg_sig& operator()(double m, double w) noexcept {
-    if (m < mass_window.first || m > mass_window.second) bkg += w;
-    else sig += w;
+    if (m < mass_window.first || m > mass_window.second) bkg_tmp += w;
+    else sig_tmp += w;
     return *this;
+  }
+  void merge(double n) {
+    bkg += bkg_tmp/n;
+    sig += sig_tmp/n;
+    bkg_tmp = 0.;
+    sig_tmp = 0.;
   }
 };
 
@@ -65,6 +74,10 @@ struct var {
     for (unsigned i=1; i<tok.size(); ++i)
       edges[i-1] = std::stod(tok[i]);
     bins.init(edges.begin(),edges.end());
+  }
+
+  void merge(double n) {
+    for (auto& b : bins.bins()) b.merge(n);
   }
 };
 
@@ -97,6 +110,20 @@ int main(int argc, char* argv[])
     if (file->IsZombie()) return 1;
     cout << file->GetName() << endl;
 
+    double n_all = 1;
+    TIter next(file->GetListOfKeys());
+    TKey *key;
+    while ((key = static_cast<TKey*>(next()))) {
+      string name(key->GetName());
+      if (name.substr(0,8)!="CutFlow_" ||
+          name.substr(name.size()-18)!="_noDalitz_weighted") continue;
+      TH1 *h = static_cast<TH1*>(key->ReadObj());
+      cout << h->GetName() << endl;
+      n_all = h->GetBinContent(3);
+      cout << h->GetXaxis()->GetBinLabel(3) << " = " << n_all << endl;
+      break;
+    }
+
     TTree* tree = (TTree*)file->Get("CollectionTree");
 
     tree->SetBranchAddress("HGamEventInfoAuxDyn.crossSectionBRfilterEff", &eff);
@@ -127,6 +154,8 @@ int main(int argc, char* argv[])
     }
     cout << endl;
 
+    for (auto& v : vars) v->merge(n_all);
+
     file->Close();
     delete file;
   }
@@ -137,18 +166,13 @@ int main(int argc, char* argv[])
   hists.reserve(vars.size());
 
   for (const auto& v : vars) {
-    TH1 *h;
     if (v->name[0]=='N') {
-      std::vector<double> edges(v->bins.edges());
+      std::vector<double>& edges = v->bins.edges();
       edges.back() = edges[edges.size()-2]+1;
-      h = new TH1D(v->name.c_str(),"",v->bins.nbins(),edges.data());
     } else if (v->name[0]=='p' && v->name[1]=='T') {
-      std::vector<double> edges(v->bins.edges());
-      for (auto& e : edges) e /= 1e3;
-      h = new TH1D(v->name.c_str(),"",v->bins.nbins(),edges.data());
-    } else {
-      h = new TH1D(v->name.c_str(),"",v->bins.nbins(),v->bins.edges().data());
+      for (auto& e : v->bins.edges()) e /= 1e3;
     }
+    TH1 *h = new TH1D(v->name.c_str(),"",v->bins.nbins(),v->bins.edges().data());
     hists.push_back(h);
 
     cout << v->name << endl;
@@ -159,9 +183,9 @@ int main(int argc, char* argv[])
            <<','<<setw(w)<< v->bins.redge(i) <<"): "
            << v->bins[i].sig << "  "
            << v->bins[i].bkg << "  ";
-      // double sig = v->bins[i].sig / sqrt(
-      //   v->bins[i].sig + factor * v->bins[i].bkg );
-      double sig = v->bins[i].sig / sqrt( factor * v->bins[i].bkg );
+      double sig = v->bins[i].sig / sqrt(
+        v->bins[i].sig + factor * v->bins[i].bkg );
+      // double sig = v->bins[i].sig / sqrt( factor * v->bins[i].bkg );
       cout << sig << endl;
 
       h->SetBinContent(i,sig);

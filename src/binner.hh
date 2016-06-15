@@ -67,6 +67,10 @@ public:
   : _edges(std::move(edges)), _bins(_edges.size()+1)
   { }
 
+  binner(const std::vector<edge_t>& edges)
+  : _edges(edges), _bins(_edges.size()+1)
+  { }
+
   template <typename InputIterator>
   binner(InputIterator first, InputIterator last)
   : _edges(first,last), _bins(_edges.size()+1)
@@ -76,7 +80,7 @@ public:
   void init(InputIterator first, InputIterator last)
   {
     _edges = {first,last};
-    _bins.resize(_edges.size()+1);
+    _bins = decltype(_bins)(_edges.size()+1);
   }
 
   //---------------------------------------------
@@ -148,6 +152,8 @@ public:
 
   const std::vector<edge_t>& edges() const { return _edges; }
   const std::vector< bin_t>&  bins() const { return _bins;  }
+  std::vector<edge_t>& edges() { return _edges; }
+  std::vector< bin_t>&  bins() { return _bins;  }
 };
 
 #endif
