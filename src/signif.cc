@@ -35,7 +35,9 @@ class bkg_sig {
   double bkg_tmp, sig_tmp;
 public:
   double bkg, sig;
-  bkg_sig(): bkg_tmp(0), sig_tmp(0), bkg(0), sig(0) { }
+  double bkg_not_divided, sig_not_divided;
+  bkg_sig(): bkg_tmp(0), sig_tmp(0), bkg(0), sig(0),
+             bkg_not_divided(0), sig_not_divided(0) { }
   const bkg_sig& operator()(double m, double w) noexcept {
     if (m < mass_window.first || m > mass_window.second) bkg_tmp += w;
     else sig_tmp += w;
@@ -44,8 +46,13 @@ public:
   void merge(double n) {
     bkg += bkg_tmp/n;
     sig += sig_tmp/n;
+    bkg_not_divided += bkg_tmp;
+    sig_not_divided += sig_tmp;
     bkg_tmp = 0.;
     sig_tmp = 0.;
+  }
+  double signif() {
+    return sig / sqrt(sig + factor * bkg);
   }
 };
 
@@ -76,6 +83,10 @@ struct var {
     bins.init(edges.begin(),edges.end());
   }
 
+  double signif(unsigned i) {
+    return bins[i].signif();
+  }
+
   void merge(double n) {
     for (auto& b : bins.bins()) b.merge(n);
   }
@@ -85,6 +96,7 @@ int main(int argc, char* argv[])
 {
   const double lumi = 6.;
 
+  bkg_sig inclusive;
   vector<unique_ptr<var>> vars;
 
   ifstream binsf("bins.txt");
@@ -149,16 +161,23 @@ int main(int argc, char* argv[])
 
       const double w = eff*weight*lumi;
 
+      inclusive(m_yy,w);
       for (auto& v : vars)
         v->bins.fill(v->x(),m_yy,w);
     }
     cout << endl;
 
+    inclusive.merge(n_all);
     for (auto& v : vars) v->merge(n_all);
 
     file->Close();
     delete file;
   }
+
+  cout << "Inclusive" << endl;
+  test(inclusive.sig_not_divided)
+  test(inclusive.sig)
+  test(inclusive.signif())
 
   TFile* file = new TFile("sig.root","recreate");
 
@@ -183,12 +202,10 @@ int main(int argc, char* argv[])
            <<','<<setw(w)<< v->bins.redge(i) <<"): "
            << v->bins[i].sig << "  "
            << v->bins[i].bkg << "  ";
-      double sig = v->bins[i].sig / sqrt(
-        v->bins[i].sig + factor * v->bins[i].bkg );
-      // double sig = v->bins[i].sig / sqrt( factor * v->bins[i].bkg );
-      cout << sig << endl;
 
-      h->SetBinContent(i,sig);
+      double signif = v->signif(i);
+      cout << signif << endl;
+      h->SetBinContent(i,signif);
     }
     cout << endl;
   }

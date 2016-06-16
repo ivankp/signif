@@ -2,6 +2,7 @@
 #define binner_hh
 
 #include <limits>
+#include <utility>
 #include <algorithm>
 #include <type_traits>
 
@@ -19,17 +20,17 @@ using enable_t = typename std::enable_if<Cond,Type>::type;
 template <typename Bin, typename Enable = void>
 struct binner_default_filler {
   template <typename... TT>
-  inline enable_t<(sizeof...(TT) > 1)>
-  // TODO: forward template arguments
-  operator()(Bin& bin, TT... args) noexcept(noexcept(bin(args...)))
-  { bin(args...); }
+  // inline enable_t<(sizeof...(TT) > 1)>
+  inline void operator()(Bin& bin, TT&&... args)
+  noexcept(noexcept(bin(std::forward<TT>(args)...)))
+  { bin(std::forward<TT>(args)...); }
 };
 
 template <typename Bin>
 struct binner_default_filler<Bin, enable_t<std::is_arithmetic<Bin>::value>> {
   template <typename T>
-  // TODO: forward template argument
   inline void operator()(Bin& bin, T x) noexcept { bin += x; }
+  inline void operator()(Bin& bin) noexcept { ++bin; }
 };
 
 // TODO: overload for += operator with 1 argument
@@ -46,7 +47,8 @@ public:
   typedef Filler filler_t;
   typedef typename std::vector<edge_t>::iterator  edge_iter;
   typedef typename std::vector< bin_t>::iterator   bin_iter;
-  typedef typename std::vector<edge_t>::size_type size_type;
+  // typedef typename std::vector<edge_t>::size_type size_type;
+  typedef unsigned size_type;
 
 protected:
   std::vector<edge_t> _edges;
@@ -85,7 +87,7 @@ public:
 
   //---------------------------------------------
 
-  size_type find_bin_index(edge_t e) noexcept {
+  size_type find_bin(edge_t e) noexcept {
     size_type i = _edges.size()-1;
     for (;;--i) {
       if (e >= _edges[i]) {
@@ -97,16 +99,10 @@ public:
     return i;
   }
 
-  size_type fill(edge_t e) {
-    size_type i = find_bin_index(e);
-    ++_bins[i];
-    return i;
-  }
-
   template <typename... TT>
-  size_type fill(edge_t e, const TT&... xx) {
-    size_type i = find_bin_index(e);
-    filler_t()(_bins[i], xx...);
+  size_type fill(edge_t e, TT&&... args) {
+    size_type i = find_bin(e);
+    filler_t()(_bins[i], std::forward<TT>(args)...);
     return i;
   }
 
@@ -116,8 +112,8 @@ public:
   void fill_bin(size_type i) { ++_bins.at(i); }
 
   template <typename... TT>
-  void fill_bin(size_type i, const TT&... xx) {
-    filler_t()(_bins.at(i), xx...);
+  void fill_bin(size_type i, TT&&... args) {
+    filler_t()(_bins.at(i), std::forward<TT>(args)...);
   }
 
   //---------------------------------------------
