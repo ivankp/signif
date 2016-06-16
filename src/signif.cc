@@ -125,7 +125,7 @@ int main(int argc, char* argv[])
     if (file->IsZombie()) return 1;
     cout << file->GetName() << endl;
 
-    sig_file = (i%2);
+    sig_file = (i!=1);
 
     double n_all = 1;
     TIter next(file->GetListOfKeys());
