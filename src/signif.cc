@@ -35,21 +35,26 @@ const double lumi_in = 3200.;
 const double lumi_need = 6000.;
 const double lumi_fac = sqrt(lumi_need/lumi_in);
 
+bool sig_file;
+
 class bkg_sig {
   double bkg_tmp, sig_tmp;
 public:
   double bkg, sig;
   bkg_sig(): bkg_tmp(0), sig_tmp(0), bkg(0), sig(0) { }
-  const bkg_sig& operator()(double m, double w) noexcept {
-    if (m < mass_window.first || m > mass_window.second) bkg_tmp += w;
-    else sig_tmp += w;
-    return *this;
+  void operator()(double m, double w) noexcept {
+    bool in_window = (mass_window.first < m && m < mass_window.second);
+    if ( sig_file && in_window ) sig_tmp += w;
+    else if ( !sig_file && !in_window ) bkg_tmp += w;
   }
   void merge(double n) {
-    bkg += bkg_tmp/n;
-    sig += sig_tmp/n;
-    bkg_tmp = 0.;
-    sig_tmp = 0.;
+    if (sig_file) {
+      sig += sig_tmp/n;
+      sig_tmp = 0.;
+    } else {
+      bkg += bkg_tmp/n;
+      bkg_tmp = 0.;
+    }
   }
   double signif() {
     return lumi_fac * sig / sqrt(sig + factor * bkg);
@@ -119,6 +124,8 @@ int main(int argc, char* argv[])
     TFile* file = new TFile(argv[i],"read");
     if (file->IsZombie()) return 1;
     cout << file->GetName() << endl;
+
+    sig_file = (i%2);
 
     double n_all = 1;
     TIter next(file->GetListOfKeys());
