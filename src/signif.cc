@@ -31,13 +31,15 @@ constexpr double len(pair<double,double> p) {
 
 constexpr double factor = len(mass_window)/(len(mass_range)-len(mass_window));
 
+const double lumi_in = 3200.;
+const double lumi_need = 6000.;
+const double lumi_fac = sqrt(lumi_need/lumi_in);
+
 class bkg_sig {
   double bkg_tmp, sig_tmp;
 public:
   double bkg, sig;
-  double bkg_not_divided, sig_not_divided;
-  bkg_sig(): bkg_tmp(0), sig_tmp(0), bkg(0), sig(0),
-             bkg_not_divided(0), sig_not_divided(0) { }
+  bkg_sig(): bkg_tmp(0), sig_tmp(0), bkg(0), sig(0) { }
   const bkg_sig& operator()(double m, double w) noexcept {
     if (m < mass_window.first || m > mass_window.second) bkg_tmp += w;
     else sig_tmp += w;
@@ -46,13 +48,11 @@ public:
   void merge(double n) {
     bkg += bkg_tmp/n;
     sig += sig_tmp/n;
-    bkg_not_divided += bkg_tmp;
-    sig_not_divided += sig_tmp;
     bkg_tmp = 0.;
     sig_tmp = 0.;
   }
   double signif() {
-    return sig / sqrt(sig + factor * bkg);
+    return lumi_fac * sig / sqrt(sig + factor * bkg);
   }
 };
 
@@ -94,8 +94,6 @@ struct var {
 
 int main(int argc, char* argv[])
 {
-  const double lumi = 6.;
-
   bkg_sig inclusive;
   vector<unique_ptr<var>> vars;
 
@@ -159,7 +157,7 @@ int main(int argc, char* argv[])
       if (m_yy < mass_range.first || m_yy > mass_range.second)
         continue;
 
-      const double w = eff*weight*lumi;
+      const double w = eff*weight*lumi_in;
 
       inclusive(m_yy,w);
       for (auto& v : vars)
@@ -172,12 +170,18 @@ int main(int argc, char* argv[])
 
     file->Close();
     delete file;
+
+    test(inclusive.bkg)
   }
 
+  cout << "============" << endl;
+  test(factor)
   cout << "Inclusive" << endl;
-  test(inclusive.sig_not_divided)
-  test(inclusive.sig)
-  test(inclusive.signif())
+  cout << "Signal: " << inclusive.sig << endl;
+  cout << "Bkg under signal: " << factor * inclusive.bkg << endl;
+  cout << "Bkg in sidebands: " << inclusive.bkg << endl;
+  cout << "Significance: " << inclusive.signif() << endl;
+  cout << "============" << endl;
 
   TFile* file = new TFile("sig.root","recreate");
 

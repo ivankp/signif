@@ -25,8 +25,8 @@ struct binner_filler_plus_eq {
 template <typename Bin, typename Enable = void>
 struct binner_filler_default: public binner_filler_plus_eq<Bin> {
   template <typename... TT>
-  inline enable_t< sizeof...(TT)!=1 ||
-                  !has_op_plus_eq<Bin,type_at<0,TT...>>::value >
+  inline enable_t< (sizeof...(TT)!=1) ||
+                   (!has_op_plus_eq<Bin,type_at<0,TT...>>::value) >
   operator()(Bin& bin, TT&&... args)
   noexcept(noexcept(bin(std::forward<TT>(args)...)))
   { bin(std::forward<TT>(args)...); }
