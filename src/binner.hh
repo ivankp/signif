@@ -1,10 +1,10 @@
-#ifndef binner_hh
-#define binner_hh
+#ifndef snip_binner_hh
+#define snip_binner_hh
 
 #include <limits>
 #include <utility>
-#include <algorithm>
-#include <type_traits>
+
+#include "type_traits_extra.hh"
 
 /*
  * Same convention as in ROOT TH1:
@@ -14,32 +14,48 @@
  * bin = nbins+1; overflow bin
  */
 
-template <bool Cond, class Type = void>
-using enable_t = typename std::enable_if<Cond,Type>::type;
+template <typename Bin>
+struct binner_filler_plus_eq {
+  template <typename T>
+  inline void operator()(Bin& bin, T&& x)
+  noexcept(noexcept(bin += std::forward<T>(x)))
+  { bin += std::forward<T>(x); }
+};
 
 template <typename Bin, typename Enable = void>
-struct binner_default_filler {
+struct binner_filler_default: public binner_filler_plus_eq<Bin> {
   template <typename... TT>
-  // inline enable_t<(sizeof...(TT) > 1)>
-  inline void operator()(Bin& bin, TT&&... args)
+  inline enable_t< sizeof...(TT)!=1 ||
+                  !has_op_plus_eq<Bin,type_at<0,TT...>>::value >
+  operator()(Bin& bin, TT&&... args)
   noexcept(noexcept(bin(std::forward<TT>(args)...)))
   { bin(std::forward<TT>(args)...); }
+
+  using binner_filler_plus_eq<Bin>::operator();
 };
 
 template <typename Bin>
-struct binner_default_filler<Bin, enable_t<std::is_arithmetic<Bin>::value>> {
-  template <typename T>
-  inline void operator()(Bin& bin, T x) noexcept { bin += x; }
-  inline void operator()(Bin& bin) noexcept { ++bin; }
+struct binner_filler_default<Bin, enable_t<
+  has_op_pre_increment<Bin>::value
+>>: public binner_filler_plus_eq<Bin> {
+  inline void operator()(Bin& bin) noexcept(noexcept(++bin)) { ++bin; }
+
+  using binner_filler_plus_eq<Bin>::operator();
 };
 
-// TODO: overload for += operator with 1 argument
-// http://stackoverflow.com/questions/36296301/c-sfinae-detect-increment-operator
+template <typename Bin>
+struct binner_filler_default<Bin, enable_t<
+  !has_op_pre_increment<Bin>::value && has_op_post_increment<Bin>::value
+>>: public binner_filler_plus_eq<Bin> {
+  inline void operator()(Bin& bin) noexcept(noexcept(bin++)) { bin++; }
+
+  using binner_filler_plus_eq<Bin>::operator();
+};
 
 //===================================================================
 
 template <typename Bin, typename Edge = double,
-          typename Filler = binner_default_filler<Bin>>
+          typename Filler = binner_filler_default<Bin>>
 class binner {
 public:
   typedef Bin    bin_t;
@@ -56,6 +72,20 @@ protected:
 
 public:
   binner() { }
+  binner(const binner& o): _edges(o._edges), _bins(o._bins) { }
+  binner(binner&& o) noexcept
+  : _edges(std::move(o._edges)), _bins(std::move(o._bins)) { }
+
+  binner& operator=(const binner& o) {
+    _edges = o._edges;
+    _bins = o._bins;
+    return *this;
+  }
+  binner& operator=(binner&& o) noexcept {
+    _edges = std::move(o._edges);
+    _bins = std::move(o._bins);
+    return *this;
+  }
 
   binner(size_type nbins, edge_t xlow, edge_t xup)
   : _edges(nbins+1), _bins(nbins+2)
@@ -65,13 +95,32 @@ public:
       _edges[i] = xlow + i*step;
   }
 
-  binner(std::vector<edge_t>&& edges)
-  : _edges(std::move(edges)), _bins(_edges.size()+1)
-  { }
-
   binner(const std::vector<edge_t>& edges)
   : _edges(edges), _bins(_edges.size()+1)
   { }
+  binner& operator=(const std::vector<edge_t>& edges) {
+    _edges = edges;
+    _bins = std::vector<bin_t>(_edges.size()+1);
+    return *this;
+  }
+
+  binner(std::vector<edge_t>&& edges) noexcept
+  : _edges(std::move(edges)), _bins(_edges.size()+1)
+  { }
+  binner& operator=(std::vector<edge_t>&& edges) noexcept {
+    _edges = std::move(edges);
+    _bins = std::vector<bin_t>(_edges.size()+1);
+    return *this;
+  }
+
+  binner(std::initializer_list<edge_t> il)
+  : _edges(il), _bins(_edges.size()+1)
+  { }
+  binner& operator=(std::initializer_list<edge_t> il) {
+    _edges = il;
+    _bins = std::vector<bin_t>(_edges.size()+1);
+    return *this;
+  }
 
   template <typename InputIterator>
   binner(InputIterator first, InputIterator last)
@@ -100,10 +149,21 @@ public:
   }
 
   template <typename... TT>
-  size_type fill(edge_t e, TT&&... args) {
+  size_type fill(edge_t e, TT&&... args)
+  noexcept(noexcept( filler_t()(std::declval<bin_t&>(),
+                                std::forward<TT>(args)...) ))
+  {
     size_type i = find_bin(e);
     filler_t()(_bins[i], std::forward<TT>(args)...);
     return i;
+  }
+
+  template <typename... TT>
+  inline size_type operator()(edge_t e, TT&&... args)
+  noexcept(noexcept(
+    std::declval<binner&>().fill(e, std::forward<TT>(args)...) ))
+  {
+    return fill(e, std::forward<TT>(args)...);
   }
 
   //---------------------------------------------
@@ -144,12 +204,12 @@ public:
 
   //---------------------------------------------
 
-  size_type nbins() const { return _edges.size()-1; }
+  inline size_type nbins() const { return _bins.size()-2; }
 
-  const std::vector<edge_t>& edges() const { return _edges; }
-  const std::vector< bin_t>&  bins() const { return _bins;  }
-  std::vector<edge_t>& edges() { return _edges; }
-  std::vector< bin_t>&  bins() { return _bins;  }
+  inline const std::vector<edge_t>& edges() const noexcept { return _edges; }
+  inline const std::vector< bin_t>&  bins() const noexcept { return _bins;  }
+  inline std::vector<edge_t>& edges() noexcept { return _edges; }
+  inline std::vector< bin_t>&  bins() noexcept { return _bins;  }
 };
 
 #endif
