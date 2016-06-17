@@ -7,15 +7,19 @@
 #include <memory>
 #include <cmath>
 
+#include <boost/program_options.hpp>
+
 #include <TFile.h>
 #include <TTree.h>
 #include <TH1.h>
 #include <TKey.h>
 
+#include "branches.hh"
 #include "binner.hh"
 #include "timed_counter.hh"
 
 using namespace std;
+namespace po = boost::program_options;
 
 #define test(var) \
   std::cout <<"\033[36m"<< #var <<"\033[0m"<< " = " << var << std::endl;
@@ -35,9 +39,7 @@ inline bool in(T1 x, const pair<T2,T3>& p) noexcept {
 
 constexpr double factor = len(mass_window)/(len(mass_range)-len(mass_window));
 
-const double lumi_in = 3245.;
-const double lumi_need = 6000.;
-const double lumi_fac = sqrt(lumi_need/lumi_in);
+struct { double in, need, fac; } lumi;
 
 bool mc_file;
 
@@ -61,7 +63,7 @@ public:
     }
   }
   double signif() {
-    return lumi_fac * sig / sqrt(sig + factor * bkg);
+    return lumi.fac * sig / sqrt(sig + factor * bkg);
   }
 };
 
@@ -103,10 +105,61 @@ struct var {
 
 int main(int argc, char* argv[])
 {
+  vector<string> ifname_data, ifname_mc;
+  string ofname, cfname, ifname_bins;
+
+  // options ---------------------------------------------------
+  try {
+    po::options_description desc("Options");
+    desc.add_options()
+      ("data", po::value(&ifname_data)->multitoken()->required(),
+       "input root data files")
+      ("mc", po::value(&ifname_mc)->multitoken()->required(),
+       "input root Monte Carlo files")
+      ("output,o", po::value(&ofname)->required(),
+       "output root file")
+      ("conf,c", po::value(&cfname),
+       "configuration file")
+      ("bins,b", po::value(&ifname_bins)->required(),
+       "differential variables bins")
+      ("lumi.in", po::value(&lumi.in)->default_value(3245.),
+       "configuration file")
+      ("lumi.need", po::value(&lumi.need)->default_value(6000.),
+       "configuration file")
+    ;
+
+    po::positional_options_description pos;
+    pos.add("conf",1);
+
+    po::variables_map vm;
+    po::store(po::command_line_parser(argc, argv)
+      .options(desc).positional(pos).run(), vm);
+    if (argc == 1) {
+      cout << desc << endl;
+      return 0;
+    }
+    if (vm.count("conf")) {
+      po::store( po::parse_config_file<char>(
+        vm["conf"].as<string>().c_str(), desc), vm);
+    }
+    po::notify(vm);
+  } catch (exception& e) {
+    cerr << "\033[31m" << argv[0]
+         << " options: " <<  e.what() <<"\033[0m"<< endl;
+    return 1;
+  }
+  // end options ---------------------------------------------------
+
+  vector<pair<const string*,bool>> ifname;
+  for (const auto& f : ifname_data) ifname.emplace_back(&f,false);
+  for (const auto& f : ifname_mc  ) ifname.emplace_back(&f,true );
+
+  lumi.fac = sqrt(lumi.need/lumi.in);
+
   bkg_sig inclusive;
   vector<unique_ptr<var>> vars;
 
-  ifstream binsf("bins.txt");
+  ifstream binsf(ifname_bins);
   if (binsf.is_open()) {
     string line;
     while ( getline(binsf,line) ) {
@@ -116,7 +169,7 @@ int main(int argc, char* argv[])
     }
     binsf.close();
   } else {
-    cout << "Unable to open bins.txt" << endl;
+    cout << "Unable to open " << ifname_bins << endl;
     return 1;
   }
 
@@ -124,12 +177,14 @@ int main(int argc, char* argv[])
   Float_t cs_br_fe, weight, m_yy;
 
   timed_counter counter;
-  for (int i=1; i<argc; ++i) {
-    TFile* file = new TFile(argv[i],"read");
+  for (const auto& f : ifname) {
+    TFile* file = new TFile(f.first->c_str(),"read");
     if (file->IsZombie()) return 1;
-    cout << file->GetName() << endl;
 
-    mc_file = (i!=1);
+    mc_file = f.second;
+
+    cout << ( mc_file ? "MC:" : "Data:" ) << ' '
+         << file->GetName() << endl;
 
     double n_all = 1;
     if (mc_file) {
@@ -149,24 +204,17 @@ int main(int argc, char* argv[])
 
     TTree* tree = (TTree*)file->Get("CollectionTree");
 
-    tree->SetBranchStatus("*", 0);
+    branches(tree,
+      "HGamEventInfoAuxDyn.weight",   &weight,
+      "HGamEventInfoAuxDyn.isPassed", &isPassed,
+      "HGamEventInfoAuxDyn.m_yy",     &m_yy
+    );
 
-    if (mc_file) {
-      tree->SetBranchStatus("HGamEventInfoAuxDyn.crossSectionBRfilterEff", 1);
-      tree->SetBranchAddress("HGamEventInfoAuxDyn.crossSectionBRfilterEff", &cs_br_fe);
-    }
-    tree->SetBranchStatus("HGamEventInfoAuxDyn.weight", 1);
-    tree->SetBranchAddress("HGamEventInfoAuxDyn.weight", &weight);
-    tree->SetBranchStatus("HGamEventInfoAuxDyn.isPassed", 1);
-    tree->SetBranchAddress("HGamEventInfoAuxDyn.isPassed", &isPassed);
-
-    tree->SetBranchStatus("HGamEventInfoAuxDyn.m_yy", 1);
-    tree->SetBranchAddress("HGamEventInfoAuxDyn.m_yy", &m_yy);
+    if (mc_file) branches_set_on(tree,
+      "HGamEventInfoAuxDyn.crossSectionBRfilterEff", &cs_br_fe);
 
     for (auto& v : vars) {
-      tree->SetBranchStatus(
-        ("HGamEventInfoAuxDyn."+v->name).c_str(), 1);
-      tree->SetBranchAddress(
+      branches_set_on(tree,
         ("HGamEventInfoAuxDyn."+v->name).c_str(),
         reinterpret_cast<void*>(&(v->_x))
       );
@@ -179,7 +227,7 @@ int main(int argc, char* argv[])
       if (!isPassed) continue;
       if (!in(m_yy,mass_range)) continue;
 
-      if (mc_file) weight *= cs_br_fe*lumi_in;
+      if (mc_file) weight *= cs_br_fe*lumi.in;
 
       inclusive(m_yy,weight);
       for (auto& v : vars)
@@ -192,8 +240,6 @@ int main(int argc, char* argv[])
 
     file->Close();
     delete file;
-
-    test(inclusive.bkg)
   }
 
   cout << "============" << endl;
@@ -205,7 +251,7 @@ int main(int argc, char* argv[])
   cout << "Significance: " << inclusive.signif() << endl;
   cout << "============" << endl;
 
-  TFile* file = new TFile("sig.root","recreate");
+  TFile* file = new TFile(ofname.c_str(),"recreate");
 
   vector<TH1*> hists;
   hists.reserve(vars.size());

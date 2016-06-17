@@ -8,7 +8,7 @@ ROOT_CFLAGS := $(shell root-config --cflags)
 ROOT_LIBS   := $(shell root-config --libs)
 
 INCL_signif := $(ROOT_CFLAGS)
-LIBS_signif := $(ROOT_LIBS)
+LIBS_signif := $(ROOT_LIBS) -lboost_program_options
 
 SRCDIR := src
 BLDDIR := .build
