@@ -28,14 +28,18 @@ constexpr pair<double,double> mass_window{121000.,129000.};
 constexpr double len(pair<double,double> p) {
   return p.second - p.first;
 }
+template <typename T1, typename T2, typename T3>
+inline bool in(T1 x, const pair<T2,T3>& p) noexcept {
+  return (p.first < x && x < p.second);
+}
 
 constexpr double factor = len(mass_window)/(len(mass_range)-len(mass_window));
 
-const double lumi_in = 3200.;
+const double lumi_in = 3245.;
 const double lumi_need = 6000.;
 const double lumi_fac = sqrt(lumi_need/lumi_in);
 
-bool sig_file;
+bool mc_file;
 
 class bkg_sig {
   double bkg_tmp, sig_tmp;
@@ -43,12 +47,12 @@ public:
   double bkg, sig;
   bkg_sig(): bkg_tmp(0), sig_tmp(0), bkg(0), sig(0) { }
   void operator()(double m, double w) noexcept {
-    bool in_window = (mass_window.first < m && m < mass_window.second);
-    if ( sig_file && in_window ) sig_tmp += w;
-    else if ( !sig_file && !in_window ) bkg_tmp += w;
+    bool in_window = in(m,mass_window);
+    if ( mc_file && in_window ) sig_tmp += w;
+    else if ( !mc_file && !in_window ) bkg_tmp += w;
   }
   void merge(double n) {
-    if (sig_file) {
+    if (mc_file) {
       sig += sig_tmp/n;
       sig_tmp = 0.;
     } else {
@@ -117,7 +121,7 @@ int main(int argc, char* argv[])
   }
 
   Char_t isPassed;
-  Float_t eff, weight, m_yy;
+  Float_t cs_br_fe, weight, m_yy;
 
   timed_counter counter;
   for (int i=1; i<argc; ++i) {
@@ -125,50 +129,61 @@ int main(int argc, char* argv[])
     if (file->IsZombie()) return 1;
     cout << file->GetName() << endl;
 
-    sig_file = (i!=1);
+    mc_file = (i!=1);
 
     double n_all = 1;
-    TIter next(file->GetListOfKeys());
-    TKey *key;
-    while ((key = static_cast<TKey*>(next()))) {
-      string name(key->GetName());
-      if (name.substr(0,8)!="CutFlow_" ||
-          name.substr(name.size()-18)!="_noDalitz_weighted") continue;
-      TH1 *h = static_cast<TH1*>(key->ReadObj());
-      cout << h->GetName() << endl;
-      n_all = h->GetBinContent(3);
-      cout << h->GetXaxis()->GetBinLabel(3) << " = " << n_all << endl;
-      break;
+    if (mc_file) {
+      TIter next(file->GetListOfKeys());
+      TKey *key;
+      while ((key = static_cast<TKey*>(next()))) {
+        string name(key->GetName());
+        if (name.substr(0,8)!="CutFlow_" ||
+            name.substr(name.size()-18)!="_noDalitz_weighted") continue;
+        TH1 *h = static_cast<TH1*>(key->ReadObj());
+        cout << h->GetName() << endl;
+        n_all = h->GetBinContent(3);
+        cout << h->GetXaxis()->GetBinLabel(3) << " = " << n_all << endl;
+        break;
+      }
     }
 
     TTree* tree = (TTree*)file->Get("CollectionTree");
 
-    tree->SetBranchAddress("HGamEventInfoAuxDyn.crossSectionBRfilterEff", &eff);
+    tree->SetBranchStatus("*", 0);
+
+    if (mc_file) {
+      tree->SetBranchStatus("HGamEventInfoAuxDyn.crossSectionBRfilterEff", 1);
+      tree->SetBranchAddress("HGamEventInfoAuxDyn.crossSectionBRfilterEff", &cs_br_fe);
+    }
+    tree->SetBranchStatus("HGamEventInfoAuxDyn.weight", 1);
     tree->SetBranchAddress("HGamEventInfoAuxDyn.weight", &weight);
+    tree->SetBranchStatus("HGamEventInfoAuxDyn.isPassed", 1);
     tree->SetBranchAddress("HGamEventInfoAuxDyn.isPassed", &isPassed);
 
+    tree->SetBranchStatus("HGamEventInfoAuxDyn.m_yy", 1);
     tree->SetBranchAddress("HGamEventInfoAuxDyn.m_yy", &m_yy);
 
-    for (auto& v : vars)
+    for (auto& v : vars) {
+      tree->SetBranchStatus(
+        ("HGamEventInfoAuxDyn."+v->name).c_str(), 1);
       tree->SetBranchAddress(
         ("HGamEventInfoAuxDyn."+v->name).c_str(),
         reinterpret_cast<void*>(&(v->_x))
       );
+    }
 
     for (Long64_t ent=0, n=tree->GetEntries(); ent<n; ++ent) {
       counter(ent);
       tree->GetEntry(ent);
 
       if (!isPassed) continue;
+      if (!in(m_yy,mass_range)) continue;
 
-      if (m_yy < mass_range.first || m_yy > mass_range.second)
-        continue;
+      if (mc_file) weight *= cs_br_fe*lumi_in;
 
-      const double w = eff*weight*lumi_in;
-
-      inclusive(m_yy,w);
+      inclusive(m_yy,weight);
       for (auto& v : vars)
-        v->bins.fill(v->x(),m_yy,w);
+        v->bins.fill(v->x(),m_yy,weight);
     }
     cout << endl;
 
