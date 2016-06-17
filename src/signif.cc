@@ -70,10 +70,12 @@ public:
 struct var {
   string name;
   binner<bkg_sig> bins;
+  bool take_abs;
   union { Float_t f; Int_t i; } _x;
   Float_t x() const noexcept {
-    if (name[0]=='N') return _x.i;
-    else return _x.f;
+    Float_t out = (name[0]=='N') ? _x.i : _x.f;
+    if (take_abs) out = abs(out);
+    return out;
   }
 
   var(const string& str) {
@@ -92,6 +94,8 @@ struct var {
     for (unsigned i=1; i<tok.size(); ++i)
       edges[i-1] = std::stod(tok[i]);
     bins.init(edges.begin(),edges.end());
+
+    take_abs = (name=="Dphi_j_j" || name=="cosTS_yy");
   }
 
   double signif(unsigned i) {
@@ -124,7 +128,7 @@ int main(int argc, char* argv[])
        "differential variables bins")
       ("lumi.in", po::value(&lumi.in)->default_value(3245.),
        "configuration file")
-      ("lumi.need", po::value(&lumi.need)->default_value(6000.),
+      ("lumi.need,l", po::value(&lumi.need)->default_value(6000.),
        "configuration file")
     ;
 
