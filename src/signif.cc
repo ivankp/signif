@@ -13,18 +13,18 @@
 #include <TTree.h>
 #include <TH1.h>
 #include <TKey.h>
+#include <TAxis.h>
 
 #include "branches.hh"
 #include "binner.hh"
 #include "timed_counter.hh"
+#include "in.hh"
 
 using namespace std;
 namespace po = boost::program_options;
 
 #define test(var) \
   std::cout <<"\033[36m"<< #var <<"\033[0m"<< " = " << var << std::endl;
-
-#define h_(name,nbins,lo,hi) TH1D *h_##name = new TH1D(#name,"",nbins,lo,hi);
 
 constexpr pair<double,double> mass_range {105000.,160000.};
 constexpr pair<double,double> mass_window{121000.,129000.};
@@ -63,7 +63,7 @@ public:
     }
   }
   double signif() {
-    return lumi.fac * sig / sqrt(sig + factor * bkg);
+    return sig!=0 ? lumi.fac * sig / sqrt(sig + factor * bkg) : 0;
   }
 };
 
@@ -95,7 +95,7 @@ struct var {
       edges[i-1] = std::stod(tok[i]);
     bins.init(edges.begin(),edges.end());
 
-    take_abs = (name=="Dphi_j_j" || name=="cosTS_yy");
+    take_abs = in(name,"Dphi_j_j","cosTS_yy","Dy_j_j");
   }
 
   double signif(unsigned i) {
@@ -160,7 +160,7 @@ int main(int argc, char* argv[])
 
   lumi.fac = sqrt(lumi.need/lumi.in);
 
-  bkg_sig inclusive;
+  bkg_sig inclusive, nj0, njless2;
   vector<unique_ptr<var>> vars;
 
   ifstream binsf(ifname_bins);
@@ -179,8 +179,8 @@ int main(int argc, char* argv[])
 
   Char_t isPassed;
   Float_t cs_br_fe, weight, m_yy;
+  Int_t *njets = nullptr;
 
-  timed_counter counter;
   for (const auto& f : ifname) {
     TFile* file = new TFile(f.first->c_str(),"read");
     if (file->IsZombie()) return 1;
@@ -222,24 +222,37 @@ int main(int argc, char* argv[])
         ("HGamEventInfoAuxDyn."+v->name).c_str(),
         reinterpret_cast<void*>(&(v->_x))
       );
+      if (v->name=="N_j_30") {
+        njets = &v->_x.i;
+      }
     }
 
-    for (Long64_t ent=0, n=tree->GetEntries(); ent<n; ++ent) {
-      counter(ent);
+    if (!njets) {
+      cerr << "N_j_30 branch was not used" << endl;
+      return 1;
+    }
+
+    for (timed_counter<Long64_t> ent(tree->GetEntries()); ent.ok(); ++ent) {
       tree->GetEntry(ent);
 
       if (!isPassed) continue;
       if (!in(m_yy,mass_range)) continue;
 
-      if (mc_file) weight *= cs_br_fe*lumi.in;
+      if (mc_file) {
+        weight *= cs_br_fe*lumi.in;
+      }
 
       inclusive(m_yy,weight);
-      for (auto& v : vars)
+      for (auto& v : vars) {
         v->bins.fill(v->x(),m_yy,weight);
+      }
+      if ((*njets) == 0) nj0(m_yy,weight);
+      if ((*njets)  < 2) njless2(m_yy,weight);
     }
-    cout << endl;
 
     inclusive.merge(n_all);
+    nj0.merge(n_all);
+    njless2.merge(n_all);
     for (auto& v : vars) v->merge(n_all);
 
     file->Close();
@@ -261,29 +274,57 @@ int main(int argc, char* argv[])
   hists.reserve(vars.size());
 
   for (const auto& v : vars) {
-    if (v->name[0]=='N') {
-      std::vector<double>& edges = v->bins.edges();
-      edges.back() = edges[edges.size()-2]+1;
-    } else if (v->name[0]=='p' && v->name[1]=='T') {
-      for (auto& e : v->bins.edges()) e /= 1e3;
+    std::vector<double>& edges = v->bins.edges();
+    if ( std::isinf(edges.back()) ) {
+      edges.back() = edges[edges.size()-2] + (edges[1] - edges[0]);
     }
-    TH1 *h = new TH1D(v->name.c_str(),"",v->bins.nbins(),v->bins.edges().data());
+    if ( (v->name[0]=='p' && v->name[1]=='T')
+      || (v->name[0]=='m' && v->name[1]=='_') ) {
+      for (auto& e : edges) e /= 1e3;
+    }
+
+    const unsigned n = v->bins.nbins();
+    TH1 *h = new TH1D(v->name.c_str(),"",n,v->bins.edges().data());
     hists.push_back(h);
 
     cout << v->name << endl;
-    const unsigned n = v->bins.nbins();
-    const unsigned w = log10(v->bins.edges().back())+1;
-    for (unsigned i=1; i<=n; ++i) {
-      cout <<'['<<setw(w)<< v->bins.ledge(i)
-           <<','<<setw(w)<< v->bins.redge(i) <<"): "
-           << v->bins[i].sig << "  "
-           << v->bins[i].bkg << "  ";
+    unsigned bin = 1;
+    if ( v->name.substr(v->name.size()-4)=="_j_j"
+      || v->name.substr(v->name.size()-3)=="_jj"
+    ) {
+      h->SetBinContent(bin++,njless2.signif());
+    } else if ( v->name.substr(v->name.size()-3)=="_j1" ) {
+      h->SetBinContent(bin++,nj0.signif());
+    }
 
-      double signif = v->signif(i);
+    const unsigned w = log10(v->bins.edges().back())+1;
+    for (; bin<=n; ++bin) {
+      cout <<'['<<setw(w)<< v->bins.ledge(bin)
+           <<','<<setw(w)<< v->bins.redge(bin) <<"): "
+           << v->bins[bin].sig << "  "
+           << v->bins[bin].bkg << "  ";
+
+      double signif = v->signif(bin);
       cout << signif << endl;
-      h->SetBinContent(i,signif);
+      h->SetBinContent(bin,signif);
     }
     cout << endl;
+
+    TAxis *xa = h->GetXaxis();
+    if (v->name[0]=='N') {
+      for (unsigned i=1; ; ++i) {
+        stringstream ss;
+        if (n-i) {
+          ss << " = " << i-1;
+          xa->SetBinLabel(i,ss.str().c_str());
+        } else {
+          ss << " #geq " << i-1;
+          xa->SetBinLabel(i,ss.str().c_str());
+          break;
+        }
+      }
+      xa->SetLabelSize(0.05);
+    }
   }
 
   file->Write();
